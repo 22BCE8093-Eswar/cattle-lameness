@@ -1,0 +1,31 @@
+# Ignore virtual environments
+venv/
+
+# Ignore model weights
+*.pth
+*.pt
+
+# Ignore videos and big media
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Ignore Python cache
+__pycache__/
+
+# Ignore logs and junk
+*.log
+.DS_Store
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.pth
+*.pt
+__pycache__/
+*.log
+*.DS_Store
+*.h5
+*.pth
+models/
