@@ -1,17 +1,19 @@
-from flask import Flask, render_template, Response, request, redirect, url_for
+from flask import Flask, render_template, Response, request, redirect, url_for, jsonify
 import cv2
 import torch
 import numpy as np
 from torchvision import models, transforms
 from torch import nn
 from ultralytics import YOLO
+from werkzeug.utils import secure_filename
+import base64
+from io import BytesIO
+from PIL import Image
 import os
 import sys
-from werkzeug.utils import secure_filename
+from collections import Counter
 import matplotlib.pyplot as plt
 
-
-# Paths
 sys.path.append(os.path.join(os.getcwd(), 'scripts'))
 from lstm_model import LSTMModel
 
@@ -40,131 +42,156 @@ transform = transforms.Compose([
 ])
 
 class_labels = ['Healthy', 'Low Lame', 'Medium Lame', 'Very Lame']
-
-def process_video(video_source):
-    cap = cv2.VideoCapture(video_source)
-    sequence = []
-
-    while cap.isOpened():
-        success, frame = cap.read()
-        if not success:
-            break
-
-        results = yolo_model(frame)[0]
-
-        for box in results.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            cls = int(box.cls[0])
-            conf = float(box.conf[0])
-            name = yolo_model.names[cls]
-
-            if name.lower() == "cow":
-                crop = frame[y1:y2, x1:x2]
-                try:
-                    crop_tensor = transform(crop).unsqueeze(0).to(device)
-                    with torch.no_grad():
-                        feature = resnet(crop_tensor).cpu().numpy().squeeze()
-                    sequence.append(feature)
-                except:
-                    continue
-
-                if len(sequence) >= 4:
-                    input_seq = torch.tensor([sequence[-4:]], dtype=torch.float32).to(device)
-                    with torch.no_grad():
-                        output = lstm_model(input_seq)
-                        pred = torch.argmax(output, dim=1).item()
-                        lameness_label = class_labels[pred]
-                else:
-                    lameness_label = "Analyzing..."
-
-                label = f"Cow - {lameness_label} ({conf:.2f})"
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            else:
-                label = f"{name} ({conf:.2f})"
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 165, 0), 2)
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
-
-        ret, buffer = cv2.imencode('.jpg', frame)
-        frame = buffer.tobytes()
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-    cap.release()
-
-def generate_live():
-    return process_video(0)
+sequence = []
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/video')
-def video():
-    return Response(generate_live(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-@app.route('/upload', methods=['POST'])
-def upload():
-    if 'file' not in request.files:
-        return redirect('/')
-    file = request.files['file']
-    if file.filename == '':
-        return redirect('/')
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
-    return redirect(url_for('uploaded_video', filename=filename))
-
-@app.route('/uploaded/<filename>')
-def uploaded_video(filename):
-    video_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    return Response(process_video(video_path), mimetype='multipart/x-mixed-replace; boundary=frame')
+@app.route('/upload')
+def upload_page():
+    return render_template('upload.html')
 
 @app.route('/plot')
 def plot_page():
     return render_template('plot.html')
 
+@app.route('/process_frame', methods=['POST'])
+def process_frame():
+    global sequence
+    data = request.json
+    if 'image' not in data:
+        return jsonify({'error': 'No image data'}), 400
+
+    # Decode base64 image
+    image_data = base64.b64decode(data['image'].split(',')[1])
+    image = Image.open(BytesIO(image_data)).convert('RGB')
+    frame = np.array(image)
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    results = yolo_model(frame)[0]
+    lameness_label = "Analyzing..."
+
+    for box in results.boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        cls = int(box.cls[0])
+        conf = float(box.conf[0])
+        name = yolo_model.names[cls]
+
+        if name.lower() == "cow":
+            crop = frame[y1:y2, x1:x2]
+            try:
+                crop_tensor = transform(crop).unsqueeze(0).to(device)
+                with torch.no_grad():
+                    feature = resnet(crop_tensor).cpu().numpy().squeeze()
+                sequence.append(feature)
+            except:
+                continue
+
+            if len(sequence) >= 4:
+                input_seq = torch.tensor([sequence[-4:]], dtype=torch.float32).to(device)
+                with torch.no_grad():
+                    output = lstm_model(input_seq)
+                    pred = torch.argmax(output, dim=1).item()
+                    lameness_label = class_labels[pred]
+
+            label = f"Cow - {lameness_label} ({conf:.2f})"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        else:
+            label = f"{name} ({conf:.2f})"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 165, 0), 2)
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+
+    _, buffer = cv2.imencode('.jpg', frame)
+    encoded_frame = base64.b64encode(buffer).decode('utf-8')
+    return jsonify({'frame': 'data:image/jpeg;base64,' + encoded_frame})
+
+@app.route('/upload_video', methods=['POST'])
+def upload_video():
+    if 'file' not in request.files:
+        return redirect('/upload')
+    file = request.files['file']
+    if file.filename == '':
+        return redirect('/upload')
+
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(filepath)
+
+    return redirect(url_for('uploaded_video', filename=filename))
+
+@app.route('/uploaded/<filename>')
+def uploaded_video(filename):
+    video_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    def generate():
+        cap = cv2.VideoCapture(video_path)
+        sequence = []
+        while cap.isOpened():
+            success, frame = cap.read()
+            if not success:
+                break
+            results = yolo_model(frame)[0]
+            for box in results.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                cls = int(box.cls[0])
+                conf = float(box.conf[0])
+                name = yolo_model.names[cls]
+                if name.lower() == "cow":
+                    crop = frame[y1:y2, x1:x2]
+                    try:
+                        crop_tensor = transform(crop).unsqueeze(0).to(device)
+                        with torch.no_grad():
+                            feature = resnet(crop_tensor).cpu().numpy().squeeze()
+                        sequence.append(feature)
+                    except:
+                        continue
+
+                    if len(sequence) >= 4:
+                        input_seq = torch.tensor([sequence[-4:]], dtype=torch.float32).to(device)
+                        with torch.no_grad():
+                            output = lstm_model(input_seq)
+                            pred = torch.argmax(output, dim=1).item()
+                            lameness_label = class_labels[pred]
+                    else:
+                        lameness_label = "Analyzing..."
+
+                    label = f"Cow - {lameness_label} ({conf:.2f})"
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        cap.release()
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
 @app.route('/analyze_plot', methods=['POST'])
 def analyze_plot():
     if 'file' not in request.files:
         return redirect('/plot')
-    
+
     file = request.files['file']
-    
     if file.filename == '':
         return redirect('/plot')
 
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    
-    # Check file size (5 MB threshold, you can adjust as needed)
-    file_size = len(file.read())
-    file.seek(0)  # Reset file pointer after reading
-    file_size_mb = file_size / (1024 * 1024)  # Convert to MB
-    file_size_warning = None
-    
-    if file_size_mb > 10:  # If file size exceeds 10 MB
-        file_size_warning = "The file you uploaded is big in size, it may take more time to process..."
-    
-    # Save the file after size check
     file.save(filepath)
 
     cap = cv2.VideoCapture(filepath)
     sequence = []
     predictions = []
 
-    # Process the video frames
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
             break
 
         results = yolo_model(frame)[0]
-
         for box in results.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             cls = int(box.cls[0])
             name = yolo_model.names[cls]
-
             if name.lower() == "cow":
                 crop = frame[y1:y2, x1:x2]
                 try:
@@ -174,20 +201,17 @@ def analyze_plot():
                     sequence.append(feature)
                 except:
                     continue
-
                 if len(sequence) >= 4:
                     input_seq = torch.tensor([sequence[-4:]], dtype=torch.float32).to(device)
                     with torch.no_grad():
                         output = lstm_model(input_seq)
                         pred = torch.argmax(output, dim=1).item()
                         predictions.append(pred)
-
     cap.release()
 
     if not predictions:
-        return render_template('plot.html', plot_url=None, final_label="No predictions", file_size_warning=file_size_warning)
+        return render_template('plot.html', plot_url=None, final_label="No predictions")
 
-    # Plot predictions
     plt.figure(figsize=(10, 4))
     plt.plot(predictions, marker='o', linestyle='-', color='blue')
     plt.title("Lameness Prediction Over Time")
@@ -199,14 +223,10 @@ def analyze_plot():
     plt.savefig(plot_filename)
     plt.close()
 
-    # Determine final label (most common)
-    from collections import Counter
     most_common_class = Counter(predictions).most_common(1)[0][0]
     final_label = class_labels[most_common_class]
 
-    # Return the plot and final label with warning message
-    return render_template('plot.html', plot_url=plot_filename, final_label=final_label, file_size_warning=file_size_warning)
-
+    return render_template('plot.html', plot_url=plot_filename, final_label=final_label)
 
 if __name__ == '__main__':
     app.run(debug=True)
