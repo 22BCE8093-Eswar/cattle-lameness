@@ -1,5 +1,6 @@
 from flask import Flask, render_template, Response, request, redirect, url_for, jsonify
 from flask_cors import CORS
+app = Flask(__name__)
 CORS(app)
 import cv2
 import torch
