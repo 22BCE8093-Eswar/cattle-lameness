@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Plot Analysis</title>
+    <style>
+        body {
+            background: #f5faff;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 50px;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            display: inline-block;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+
+        input[type="file"], input[type="submit"] {
+            margin: 20px;
+            padding: 10px;
+            font-size: 1rem;
+        }
+
+        img {
+            margin-top: 30px;
+            max-width: 100%;
+        }
+
+        .result {
+            margin-top: 20px;
+            font-size: 1.3rem;
+            font-weight: bold;
+            color: #004080;
+        }
+
+        .loading {
+            font-size: 1.1rem;
+            color: #999;
+            margin-top: 20px;
+        }
+
+        .size-warning {
+            font-size: 1.1rem;
+            color: #ff6a00;
+            margin-top: 20px;
+        }
+    </style>
+    <script>
+        function handleSubmit(event) {
+            const fileInput = document.querySelector('input[type="file"]');
+            const loadingText = document.getElementById("loadingText");
+            const sizeWarning = document.getElementById("sizeWarning");
+
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const fileSizeMB = file.size / (1024 * 1024);
+            if (fileSizeMB > 10) {
+                sizeWarning.style.display = "block";
+                sizeWarning.textContent = "The file you uploaded is big in size, it may take more time to process...";
+            } else {
+                sizeWarning.style.display = "none";
+                sizeWarning.textContent = "";
+            }
+
+            loadingText.style.display = "block";
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Upload Video for Plot</h1>
+        <form action="/analyze_plot" method="post" enctype="multipart/form-data" onsubmit="handleSubmit(event)">
+            <input type="file" name="file" accept="video/*" required>
+            <input type="submit" value="Upload and Plot">
+        </form>
+        <div id="loadingText" class="loading" style="display: none;">Plot processing... please wait ⏳</div>
+        <div id="sizeWarning" class="size-warning" style="display: none;"></div>
+
+        {% if file_size_warning %}
+            <div class="size-warning">{{ file_size_warning }}</div>
+        {% endif %}
+
+        {% if plot_url %}
+            <div class="result">Result: {{ final_label }}</div>
+            <img src="{{ plot_url }}" alt="Generated Plot">
+        {% endif %}
+    </div>
+</body>
+</html>

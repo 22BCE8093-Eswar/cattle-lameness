@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.log
+*.DS_Store
+*.ipynb_checkpoints/
+*.pt
+*.h5
+*.onnx
+*.mp4
+*.zip
