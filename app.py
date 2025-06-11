@@ -20,7 +20,6 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.join(os.getcwd(), 'scripts'))
 from lstm_model import LSTMModel
 
-app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
